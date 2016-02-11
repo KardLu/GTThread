@@ -5,6 +5,12 @@
 #include <ucontext.h>
 
 /* Define gtthread_t and gtthread_mutex_t types here */
+typedef struct {
+	/* data */
+}mutex;
+typedef unsigned long int gtthread_t;
+typedef mutex gtthread_mutex_t;
+
 
 void gtthread_init(long period);
 int  gtthread_create(gtthread_t *thread,
