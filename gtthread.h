@@ -3,13 +3,16 @@
 
 #include "steque.h"
 #include <ucontext.h>
+#include <unistd.h>
+#include <signal.h> 
+#include <sys/time.h>
 
 /* Define gtthread_t and gtthread_mutex_t types here */
-typedef struct {
-	/* data */
-}mutex;
+// typedef struct {
+// 	 data 
+// }mutex;
 typedef unsigned long int gtthread_t;
-typedef mutex gtthread_mutex_t;
+typedef steque_t gtthread_mutex_t;
 
 
 void gtthread_init(long period);
