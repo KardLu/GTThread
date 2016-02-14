@@ -8,9 +8,6 @@
 #include <sys/time.h>
 
 /* Define gtthread_t and gtthread_mutex_t types here */
-// typedef struct {
-// 	 data 
-// }mutex;
 typedef unsigned long int gtthread_t;
 typedef steque_t gtthread_mutex_t;
 

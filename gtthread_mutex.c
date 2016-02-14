@@ -39,13 +39,13 @@ int gtthread_mutex_lock(gtthread_mutex_t* mutex){
     return 0;
   }
 
-  if (steque_front(mutex) == gtthread_self()) {
+  if (gtthread_equal(steque_front(mutex), gtthread_self())) {
     sigprocmask(SIG_UNBLOCK, &vtalrm, NULL);
     return 0;
   }
 
   steque_enqueue(mutex, gtthread_self());
-  while (steque_front(mutex) != gtthread_self()) {
+  while (!gtthread_equal(steque_front(mutex), gtthread_self())) {
     gtthread_yield();
   }
 
@@ -60,12 +60,8 @@ int gtthread_mutex_lock(gtthread_mutex_t* mutex){
 int gtthread_mutex_unlock(gtthread_mutex_t *mutex){
   sigprocmask(SIG_BLOCK, &vtalrm, NULL);
   
-  if (steque_isempty(mutex)) {
-    sigprocmask(SIG_UNBLOCK, &vtalrm, NULL);
-    return -1;
-  }
-
-  if (steque_front(mutex) != gtthread_self()) {
+  if (steque_isempty(mutex)
+     || !gtthread_equal(steque_front(mutex), gtthread_self())) {
     sigprocmask(SIG_UNBLOCK, &vtalrm, NULL);
     return -1;
   }
