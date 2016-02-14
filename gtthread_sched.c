@@ -21,19 +21,18 @@ enum GTTHREAD_STATE {
 };
 
 typedef struct gtthread{
-  gtthread_t id;
   gtthread_t joining_id;
   ucontext_t *uct;
   enum GTTHREAD_STATE state;
   void *retval;
 }gtthread;
 
-steque_t wait_queue;
-steque_t dead_queue;
-gtthread *current;
 sigset_t vtalrm;
-static struct itimerval timer;
-gtthread_t threadCount;
+struct itimerval *timer;
+steque_t *wait_queue;
+steque_t *dead_queue;
+gtthread *current;
+gtthread_t mainThread = 0;
 
 /*
   where the thread actually starts from
@@ -45,42 +44,41 @@ void lazy_start(void *(* start_routine)(void *), void *args) {
 }
 
 /*
-  get handle of gtthread by its id.
+  get handle of gtthread by its thread address.
 */
-gtthread *gtthread_byID(gtthread_t id) {
+gtthread *get_thread(gtthread_t thread) {
 
   steque_node_t *node_t = NULL;
 
-  if (!steque_isempty(&wait_queue))
-    node_t = wait_queue.front;
+  if (!steque_isempty(wait_queue))
+    node_t = wait_queue->front;
   while (NULL != node_t) {
-    gtthread *t = (gtthread *)node_t->item;
-    if (gtthread_equal(id, t->id))
-      return  t;
+    gtthread *gt = (gtthread *)node_t->item;
+    if (gtthread_equal(thread, &(*gt)))
+      return  gt;
     node_t = node_t->next;
   }
 
-  if (!steque_isempty(&dead_queue))
-    node_t = dead_queue.front;
+  if (!steque_isempty(dead_queue))
+    node_t = dead_queue->front;
   while (NULL != node_t) {
-    gtthread *t = (gtthread *)node_t->item;    
-    if (gtthread_equal(id, t->id))
-      return  t;
+    gtthread *gt = (gtthread *)node_t->item;    
+    if (gtthread_equal(thread, &(*gt)))
+      return  gt;
     node_t = node_t->next;
   }
 
   return NULL;
 }
-
 /*
   schedule next thread to run
 */
 void turn_next(int sig) {
   sigprocmask(SIG_BLOCK, &vtalrm, NULL);
   gtthread *prev = current;
-  steque_enqueue(&wait_queue, current);
-  while(!steque_isempty(&wait_queue)) {
-    current = steque_pop(&wait_queue);
+  steque_enqueue(wait_queue, current);
+  while(!steque_isempty(wait_queue)) {
+    current = steque_pop(wait_queue);
     if (current->state == GTTHREAD_NORMAL) 
       break;
   }
@@ -97,13 +95,13 @@ void turn_next(int sig) {
 /*
   release thread heap resouces
 */
-void release(gtthread *t) {
-  free(t->uct->uc_stack.ss_sp);
-  free(t->uct);
-  t->uct = NULL;
-  t->state = GTTHREAD_DEAD;
-  t->joining_id = 0;
-  steque_enqueue(&dead_queue, t);
+void release_thread(gtthread *gt) {
+  free(gt->uct->uc_stack.ss_sp);
+  free(gt->uct);
+  gt->uct = NULL;
+  gt->state = GTTHREAD_DEAD;
+  gt->joining_id = 0;
+  steque_enqueue(dead_queue, gt);
 }
 
 /*
@@ -124,24 +122,24 @@ void release(gtthread *t) {
   for pthread_create.
  */
 void gtthread_init(long period){
-  steque_init(&wait_queue);
-  steque_init(&dead_queue);
-  threadCount = 1;
+  wait_queue = (steque_t *)malloc(sizeof(steque_t));
+  dead_queue = (steque_t *)malloc(sizeof(steque_t));
+  steque_init(wait_queue);
+  steque_init(dead_queue);
 
-  gtthread *thread = (gtthread *)malloc(sizeof(gtthread));
-  thread->id = threadCount++;
-  thread->joining_id = 0;
-  thread->retval = 0;
-  thread->state = GTTHREAD_NORMAL;
-  thread->uct = (ucontext_t *)malloc(sizeof(ucontext_t));
-  memset(thread->uct, 0, sizeof(ucontext_t));
-
-  if (getcontext(thread->uct) == -1) { 
+  gtthread *gt = (gtthread *)malloc(sizeof(gtthread));
+  gt->joining_id = 0;
+  gt->retval = 0;
+  gt->state = GTTHREAD_NORMAL;
+  gt->uct = (ucontext_t *)malloc(sizeof(ucontext_t));
+  memset(gt->uct, 0, sizeof(ucontext_t));
+  if (getcontext(gt->uct) == -1) { 
     perror("getcontext");
     exit(-1);
   }
 
-  current = thread;
+  mainThread = &(*gt);
+  current = gt;
 
   struct sigaction act;
   sigemptyset(&vtalrm);
@@ -150,10 +148,11 @@ void gtthread_init(long period){
 
   if (period <= 0)
     return;
-  timer.it_value.tv_sec = timer.it_interval.tv_sec = 0;
-  timer.it_value.tv_usec = timer.it_interval.tv_usec = period;
+  timer = (struct itimerval*)malloc(sizeof(struct itimerval));
+  timer->it_value.tv_sec = timer->it_interval.tv_sec = 0;
+  timer->it_value.tv_usec = timer->it_interval.tv_usec = period;
 
-  setitimer(ITIMER_VIRTUAL, &timer, NULL);
+  setitimer(ITIMER_VIRTUAL, timer, NULL);
   memset(&act, 0, sizeof(act));
   act.sa_handler = &turn_next;
   if (sigaction(SIGVTALRM, &act, NULL) < 0) {
@@ -161,7 +160,6 @@ void gtthread_init(long period){
     exit(-1);
   }
 }
-
 
 /*
   The gtthread_create() function mirrors the pthread_create() function,
@@ -171,24 +169,23 @@ int gtthread_create(gtthread_t *thread,
 		    void *(*start_routine)(void *),
 		    void *arg){
     sigprocmask(SIG_BLOCK, &vtalrm, NULL);
-    gtthread *t = (gtthread *)malloc(sizeof(gtthread));
-    t->id = threadCount++;
-    t->joining_id = 0;
-    t->retval = NULL;
-    t->state = GTTHREAD_NORMAL;
-    t->uct = (ucontext_t *)malloc(sizeof(ucontext_t));
-    memset(t->uct, 0, sizeof(ucontext_t));
-    if (getcontext(t->uct) == -1) {
+    gtthread *gt = (gtthread *)malloc(sizeof(gtthread));
+    gt->joining_id = 0;
+    gt->retval = NULL;
+    gt->state = GTTHREAD_NORMAL;
+    gt->uct = (ucontext_t *)malloc(sizeof(ucontext_t));
+    memset(gt->uct, 0, sizeof(ucontext_t));
+    if (getcontext(gt->uct) == -1) {
       perror("getcontext"); 
       exit(-1);
     }
-    t->uct->uc_stack.ss_sp = (char *)malloc(SIGSTKSZ);
-    t->uct->uc_stack.ss_size = SIGSTKSZ;
+    gt->uct->uc_stack.ss_sp = (char *)malloc(SIGSTKSZ);
+    gt->uct->uc_stack.ss_size = SIGSTKSZ;
 
-    makecontext(t->uct, lazy_start, 2, start_routine, arg);
-    steque_enqueue(&wait_queue, t);
+    makecontext(gt->uct, lazy_start, 2, start_routine, arg);
+    steque_enqueue(wait_queue, gt);
 
-    *thread = t->id;
+    *thread = &(*gt);
     sigprocmask(SIG_UNBLOCK, &vtalrm, NULL);
     return 0;
 }
@@ -201,13 +198,13 @@ int gtthread_join(gtthread_t thread, void **status){
   
   sigprocmask(SIG_BLOCK, &vtalrm, NULL);
 
-  gtthread *t = gtthread_byID(thread);
-  bool error = gtthread_equal(current->id, thread) || (t == NULL) || gtthread_equal(t->joining_id, current->id);
+  gtthread *gt = get_thread(thread);
+  bool error = gtthread_equal(&(*current), thread) || (gt == NULL) || gtthread_equal(gt->joining_id, &(*current));
   if (error)
     return -1;
 
   current->joining_id = thread;
-  while (t->state == GTTHREAD_NORMAL) {
+  while (gt->state == GTTHREAD_NORMAL) {
     sigprocmask(SIG_UNBLOCK, &vtalrm, NULL);
     gtthread_yield();
     sigprocmask(SIG_BLOCK, &vtalrm, NULL);
@@ -216,8 +213,8 @@ int gtthread_join(gtthread_t thread, void **status){
   if (status == NULL)
     return 0;
 
-  if (t->state == GTTHREAD_DEAD)
-    *status = t->retval;
+  if (gt->state == GTTHREAD_DEAD)
+    *status = gt->retval;
 
   return 0;
 }
@@ -228,12 +225,11 @@ int gtthread_join(gtthread_t thread, void **status){
 void gtthread_exit(void* retval){
   sigprocmask(SIG_BLOCK, &vtalrm, NULL);
 
-  if (steque_isempty(&wait_queue)) {
+  if (steque_isempty(wait_queue))
     exit(retval);
-  }
 
-  if (gtthread_equal(current->id, 1)) {
-    while (!steque_isempty(&wait_queue)) {
+  if (gtthread_equal(&(*current), mainThread)) {
+    while (!steque_isempty(wait_queue)) {
       sigprocmask(SIG_UNBLOCK, &vtalrm, NULL);
       gtthread_yield();
       sigprocmask(SIG_BLOCK, &vtalrm, NULL);
@@ -242,8 +238,8 @@ void gtthread_exit(void* retval){
   }
 
   gtthread *prev = current;
-  while (!steque_isempty(&wait_queue)) {
-    current = steque_pop(&wait_queue); 
+  while (!steque_isempty(wait_queue)) {
+    current = steque_pop(wait_queue); 
     if (current->state == GTTHREAD_NORMAL)
       break;
   }
@@ -253,12 +249,11 @@ void gtthread_exit(void* retval){
   }
 
   prev->retval = retval;
-  release(prev);
+  release_thread(prev);
 
   sigprocmask(SIG_UNBLOCK, &vtalrm, NULL);
   setcontext(current->uct);
 }
-
 
 /*
   The gtthread_yield() function is analogous to pthread_yield, causing
@@ -284,16 +279,16 @@ int  gtthread_equal(gtthread_t t1, gtthread_t t2){
   allowing one thread to terminate another asynchronously.
  */
 int  gtthread_cancel(gtthread_t thread){
-  if (gtthread_equal(thread, current->id)) 
+  if (gtthread_equal(thread, &(*current)))
     gtthread_exit(current->retval);
 
-  gtthread *t = gtthread_byID(thread);
-  if (t == NULL || t->state != GTTHREAD_NORMAL) {
+  gtthread *gt = get_thread(thread);
+  if (gt == NULL || gt->state != GTTHREAD_NORMAL) {
     sigprocmask(SIG_UNBLOCK, &vtalrm, NULL);
     return -1;
   }
 
-  release(t);
+  release_thread(gt);
   sigprocmask(SIG_UNBLOCK, &vtalrm, NULL);
   
   return 0;
@@ -303,5 +298,5 @@ int  gtthread_cancel(gtthread_t thread){
   Returns calling thread.
  */
 gtthread_t gtthread_self(void){
-  return current->id;
+  return &(*current);
 }
